@@ -7,6 +7,9 @@ import '../models/connection_model.dart';
 
 final connectionsProvider =
     FutureProvider<List<ConnectionModel>>((ref) async {
+  // Re-run whenever auth state changes (SIGNED_IN, SIGNED_OUT, etc.)
+  // so the provider doesn't get stuck in error/empty state on sign-in.
+  ref.watch(authStateProvider);
   final client = ref.watch(supabaseClientProvider);
   final userId = client.auth.currentUser?.id;
   if (userId == null) return [];

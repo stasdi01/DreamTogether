@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../connections/models/connection_model.dart';
+import '../../movies/providers/movies_provider.dart';
 import '../models/wishlist_item_model.dart';
 
 // ── Read: all items for a connection ────────────────────────────────────────
@@ -107,5 +108,19 @@ class WishlistActions {
       'p_notes': notes,
     });
     ref.invalidate(wishlistItemsProvider(item.connectionId));
+  }
+
+  /// Claims an item (signals intent to gift it to the owner).
+  Future<void> claimItem(String itemId, String connectionId) async {
+    await client.rpc('claim_wishlist_item', params: {'p_item_id': itemId});
+    ref.invalidate(wishlistItemsProvider(connectionId));
+    ref.invalidate(allMovieItemsProvider);
+  }
+
+  /// Removes a claim placed by the current user.
+  Future<void> unclaimItem(String itemId, String connectionId) async {
+    await client.rpc('unclaim_wishlist_item', params: {'p_item_id': itemId});
+    ref.invalidate(wishlistItemsProvider(connectionId));
+    ref.invalidate(allMovieItemsProvider);
   }
 }

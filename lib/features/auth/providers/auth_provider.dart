@@ -33,7 +33,9 @@ class AuthActions {
       data: {'full_name': displayName},
     );
     if (response.user != null) {
-      await _upsertProfile(response.user!, displayName: displayName);
+      try {
+        await _upsertProfile(response.user!, displayName: displayName);
+      } catch (_) {}
     }
   }
 
@@ -46,7 +48,11 @@ class AuthActions {
       password: password,
     );
     if (response.user != null) {
-      await _upsertProfile(response.user!);
+      // Best-effort profile upsert — don't let a DB hiccup surface as a
+      // sign-in error since the auth itself succeeded.
+      try {
+        await _upsertProfile(response.user!);
+      } catch (_) {}
     }
   }
 

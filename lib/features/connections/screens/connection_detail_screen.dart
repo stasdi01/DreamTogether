@@ -108,7 +108,8 @@ class _ConnectionDetailScreenState
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _ItemDetailSheet(item: item),
+      builder: (_) =>
+          _ItemDetailSheet(item: item, members: _sortedMembers),
     );
   }
 
@@ -459,18 +460,26 @@ class _ItemCard extends StatelessWidget {
                         ],
                       ],
                     ),
-                    if (item.linkUrl != null || item.notes != null) ...[
+                    if (item.linkUrl != null ||
+                        item.notes != null ||
+                        (!isOwner && item.isClaimed)) ...[
                       const SizedBox(height: 6),
-                      Row(
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
                         children: [
+                          if (!isOwner && item.isClaimed)
+                            _SmallChip(
+                              icon: Icons.check_circle_rounded,
+                              label: 'Claimed',
+                              color: const Color(0xFF16A34A),
+                            ),
                           if (item.linkUrl != null)
                             _SmallChip(
                               icon: Icons.link_rounded,
                               label: 'Link',
                               color: AppTheme.brightPurple,
                             ),
-                          if (item.linkUrl != null && item.notes != null)
-                            const SizedBox(width: 6),
                           if (item.notes != null)
                             _SmallChip(
                               icon: Icons.notes_rounded,
@@ -929,16 +938,72 @@ class _PriorityPicker extends StatelessWidget {
   }
 }
 
-// ── Item detail sheet (read-only, for non-owners) ────────────────────────────
+// ── Item detail sheet (read-only for non-owners, with claim/unclaim) ──────────
 
-class _ItemDetailSheet extends StatelessWidget {
+class _ItemDetailSheet extends ConsumerStatefulWidget {
   final WishlistItem item;
-  const _ItemDetailSheet({required this.item});
+  final List<ConnectionMember> members;
+
+  const _ItemDetailSheet({required this.item, required this.members});
+
+  @override
+  ConsumerState<_ItemDetailSheet> createState() => _ItemDetailSheetState();
+}
+
+class _ItemDetailSheetState extends ConsumerState<_ItemDetailSheet> {
+  bool _isClaiming = false;
+
+  Future<void> _claim() async {
+    setState(() => _isClaiming = true);
+    try {
+      await ref
+          .read(wishlistActionsProvider)
+          .claimItem(widget.item.id, widget.item.connectionId);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _isClaiming = false);
+    }
+  }
+
+  Future<void> _unclaim() async {
+    setState(() => _isClaiming = true);
+    try {
+      await ref
+          .read(wishlistActionsProvider)
+          .unclaimItem(widget.item.id, widget.item.connectionId);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _isClaiming = false);
+    }
+  }
+
+  String? _claimedByName() {
+    if (widget.item.claimedBy == null) return null;
+    final matches =
+        widget.members.where((m) => m.userId == widget.item.claimedBy);
+    return matches.isEmpty ? null : matches.first.displayName;
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final item = widget.item;
+    final currentUserId =
+        ref.watch(supabaseClientProvider).auth.currentUser?.id;
+    final isClaimedByMe = item.isClaimed && item.claimedBy == currentUserId;
+    final isClaimedByOther =
+        item.isClaimed && item.claimedBy != currentUserId;
 
     return Container(
       decoration: BoxDecoration(
@@ -1105,10 +1170,62 @@ class _ItemDetailSheet extends StatelessWidget {
             ),
           ],
 
-          const SizedBox(height: 24),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+          // Claim section
+          const SizedBox(height: 20),
+          if (isClaimedByOther)
+            _ClaimedBanner(name: _claimedByName())
+          else if (isClaimedByMe)
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _isClaiming ? null : _unclaim,
+                icon: _isClaiming
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(
+                        Icons.check_circle_outline_rounded,
+                        size: 18,
+                      ),
+                label: const Text('Unclaim'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF16A34A),
+                  side: const BorderSide(color: Color(0xFF16A34A)),
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _isClaiming ? null : _claim,
+                icon: _isClaiming
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(
+                        Icons.volunteer_activism_rounded,
+                        size: 18,
+                      ),
+                label: const Text("I'll get this"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF16A34A),
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+
+          const SizedBox(height: 8),
+          Center(
+            child: TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
           ),
         ],
       ),
@@ -1117,36 +1234,86 @@ class _ItemDetailSheet extends StatelessWidget {
 
   IconData _categoryIcon(ItemCategory cat) {
     switch (cat) {
-      case ItemCategory.product: return Icons.shopping_bag_outlined;
-      case ItemCategory.place: return Icons.place_outlined;
-      case ItemCategory.movie: return Icons.movie_outlined;
-      case ItemCategory.experience: return Icons.auto_awesome_outlined;
+      case ItemCategory.product:
+        return Icons.shopping_bag_outlined;
+      case ItemCategory.place:
+        return Icons.place_outlined;
+      case ItemCategory.movie:
+        return Icons.movie_outlined;
+      case ItemCategory.experience:
+        return Icons.auto_awesome_outlined;
     }
   }
 
   Color _categoryColor(ItemCategory cat) {
     switch (cat) {
-      case ItemCategory.product: return AppTheme.brightPurple;
-      case ItemCategory.place: return const Color(0xFF16A34A);
-      case ItemCategory.movie: return const Color(0xFFEA580C);
-      case ItemCategory.experience: return const Color(0xFF0EA5E9);
+      case ItemCategory.product:
+        return AppTheme.brightPurple;
+      case ItemCategory.place:
+        return const Color(0xFF16A34A);
+      case ItemCategory.movie:
+        return const Color(0xFFEA580C);
+      case ItemCategory.experience:
+        return const Color(0xFF0EA5E9);
     }
   }
 
   Color _priorityColor(ItemPriority p) {
     switch (p) {
-      case ItemPriority.low: return Colors.grey;
-      case ItemPriority.medium: return Colors.orange;
-      case ItemPriority.high: return const Color(0xFFEF4444);
+      case ItemPriority.low:
+        return Colors.grey;
+      case ItemPriority.medium:
+        return Colors.orange;
+      case ItemPriority.high:
+        return const Color(0xFFEF4444);
     }
   }
 
   String _priorityLabel(ItemPriority p) {
     switch (p) {
-      case ItemPriority.low: return 'Low priority';
-      case ItemPriority.medium: return 'Medium priority';
-      case ItemPriority.high: return 'High priority';
+      case ItemPriority.low:
+        return 'Low priority';
+      case ItemPriority.medium:
+        return 'Medium priority';
+      case ItemPriority.high:
+        return 'High priority';
     }
+  }
+}
+
+// ── Claimed banner ────────────────────────────────────────────────────────────
+
+class _ClaimedBanner extends StatelessWidget {
+  final String? name;
+  const _ClaimedBanner({this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16A34A).withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: const Color(0xFF16A34A).withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle_rounded,
+              color: Color(0xFF16A34A), size: 18),
+          const SizedBox(width: 8),
+          Text(
+            name != null ? 'Claimed by $name' : 'Already claimed',
+            style: const TextStyle(
+              color: Color(0xFF16A34A),
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
