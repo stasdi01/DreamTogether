@@ -27,21 +27,27 @@ class AuthActions {
     required String password,
     required String displayName,
   }) async {
-    await _client.auth.signUp(
+    final response = await _client.auth.signUp(
       email: email,
       password: password,
       data: {'full_name': displayName},
     );
+    if (response.user != null) {
+      await _upsertProfile(response.user!, displayName: displayName);
+    }
   }
 
   Future<void> signIn({
     required String email,
     required String password,
   }) async {
-    await _client.auth.signInWithPassword(
+    final response = await _client.auth.signInWithPassword(
       email: email,
       password: password,
     );
+    if (response.user != null) {
+      await _upsertProfile(response.user!);
+    }
   }
 
   Future<void> signOut() async {
@@ -50,5 +56,25 @@ class AuthActions {
 
   Future<void> resetPassword(String email) async {
     await _client.auth.resetPasswordForEmail(email);
+  }
+
+  /// Ensures the user profile row exists in public.users.
+  /// Called after every sign-in/sign-up as a safety net.
+  Future<void> _upsertProfile(User user, {String? displayName}) async {
+    final name = displayName ??
+        user.userMetadata?['full_name'] as String? ??
+        user.userMetadata?['name'] as String? ??
+        user.email?.split('@').first ??
+        'User';
+
+    await _client.from('users').upsert(
+      {
+        'id': user.id,
+        'email': user.email ?? '',
+        'display_name': name,
+        'avatar_url': user.userMetadata?['avatar_url'] as String?,
+      },
+      onConflict: 'id',
+    );
   }
 }

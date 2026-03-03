@@ -10,6 +10,9 @@ import '../../features/auth/screens/login_screen.dart';
 import '../../features/auth/screens/signup_screen.dart';
 import '../../features/home/screens/main_shell.dart';
 import '../../features/connections/screens/connections_screen.dart';
+import '../../features/connections/screens/invite_code_screen.dart';
+import '../../features/connections/screens/connection_detail_screen.dart';
+import '../../features/connections/models/connection_model.dart';
 import '../../features/wishlist/screens/wishlist_screen.dart';
 import '../../features/movies/screens/movies_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
@@ -31,7 +34,8 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       final isPublicRoute = loc == '/onboarding' ||
           loc == '/login' ||
-          loc == '/signup';
+          loc == '/signup' ||
+          loc == '/invite';
 
       if (!isAuthenticated && !isPublicRoute) return '/login';
       if (isAuthenticated && isPublicRoute) return '/home';
@@ -54,6 +58,21 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/signup',
         builder: (_, __) => const SignupScreen(),
+      ),
+      GoRoute(
+        path: '/connection/:id',
+        builder: (context, state) => ConnectionDetailScreen(
+          connectionId: state.pathParameters['id']!,
+          initialConnection: state.extra as ConnectionModel?,
+        ),
+      ),
+      GoRoute(
+        path: '/invite',
+        builder: (context, state) => InviteCodeScreen(
+          code: state.uri.queryParameters['code'] ?? '',
+          connectionName:
+              state.uri.queryParameters['name'] ?? 'Your Group',
+        ),
       ),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) =>
