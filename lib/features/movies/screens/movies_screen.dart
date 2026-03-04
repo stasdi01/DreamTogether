@@ -152,11 +152,56 @@ class _MovieList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView.separated(
+    final active = movies.where((m) => !m.item.isGifted).toList();
+    final history = movies.where((m) => m.item.isGifted).toList();
+
+    final rows = <Widget>[];
+    for (int i = 0; i < active.length; i++) {
+      if (i > 0) rows.add(const SizedBox(height: 10));
+      rows.add(_MovieCard(row: active[i]));
+    }
+
+    if (history.isNotEmpty) {
+      rows.add(const SizedBox(height: 24));
+      rows.add(_HistorySectionHeader(count: history.length));
+      for (final h in history) {
+        rows.add(const SizedBox(height: 10));
+        rows.add(_MovieCard(row: h, dimmed: true));
+      }
+    }
+
+    return ListView(
       padding: const EdgeInsets.all(16),
-      itemCount: movies.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (_, i) => _MovieCard(row: movies[i]),
+      children: rows,
+    );
+  }
+}
+
+// ── History section header ────────────────────────────────────────────────────
+
+class _HistorySectionHeader extends StatelessWidget {
+  final int count;
+  const _HistorySectionHeader({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Icon(Icons.history_rounded,
+            size: 16, color: theme.colorScheme.onSurfaceVariant),
+        const SizedBox(width: 6),
+        Text(
+          'History ($count)',
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.5,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(child: Divider(color: theme.colorScheme.outlineVariant)),
+      ],
     );
   }
 }
@@ -165,7 +210,8 @@ class _MovieList extends StatelessWidget {
 
 class _MovieCard extends StatelessWidget {
   final MovieItemRow row;
-  const _MovieCard({required this.row});
+  final bool dimmed;
+  const _MovieCard({required this.row, this.dimmed = false});
 
   @override
   Widget build(BuildContext context) {
@@ -173,14 +219,16 @@ class _MovieCard extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final item = row.item;
 
-    return Card(
+    final card = Card(
       child: InkWell(
-        onTap: () => showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (_) => _MovieDetailSheet(row: row),
-        ),
+        onTap: dimmed
+            ? null
+            : () => showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (_) => _MovieDetailSheet(row: row),
+                ),
         borderRadius: BorderRadius.circular(16),
         child: Padding(
           padding: const EdgeInsets.all(14),
@@ -293,21 +341,54 @@ class _MovieCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
+
+                    // Gifted chip
+                    if (item.isGifted) ...[
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF7C3AED).withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.card_giftcard_rounded,
+                                size: 11, color: Color(0xFF7C3AED)),
+                            SizedBox(width: 3),
+                            Text(
+                              'Gifted',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Color(0xFF7C3AED),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
 
-              const SizedBox(width: 4),
-              Icon(
-                Icons.chevron_right_rounded,
-                color: theme.colorScheme.onSurfaceVariant,
-                size: 20,
-              ),
+              if (!dimmed) ...[
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: theme.colorScheme.onSurfaceVariant,
+                  size: 20,
+                ),
+              ],
             ],
           ),
         ),
       ),
     );
+
+    return dimmed ? Opacity(opacity: 0.5, child: card) : card;
   }
 }
 
@@ -368,6 +449,7 @@ class _MovieDetailSheet extends ConsumerStatefulWidget {
 
 class _MovieDetailSheetState extends ConsumerState<_MovieDetailSheet> {
   bool _isClaiming = false;
+  bool _isGifting = false;
 
   Future<void> _claim() async {
     setState(() => _isClaiming = true);
@@ -405,6 +487,24 @@ class _MovieDetailSheetState extends ConsumerState<_MovieDetailSheet> {
     }
   }
 
+  Future<void> _markGifted() async {
+    setState(() => _isGifting = true);
+    try {
+      await ref.read(wishlistActionsProvider).markItemGifted(
+            widget.row.item.id,
+            widget.row.connectionId,
+          );
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _isGifting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -413,9 +513,11 @@ class _MovieDetailSheetState extends ConsumerState<_MovieDetailSheet> {
     final currentUserId =
         ref.watch(supabaseClientProvider).auth.currentUser?.id;
     final isOwner = item.userId == currentUserId;
-    final isClaimedByMe = item.isClaimed && item.claimedBy == currentUserId;
+    final isGifted = item.isGifted;
+    final isClaimedByMe =
+        !isGifted && item.isClaimed && item.claimedBy == currentUserId;
     final isClaimedByOther =
-        item.isClaimed && item.claimedBy != currentUserId;
+        !isGifted && item.isClaimed && item.claimedBy != currentUserId;
 
     return Container(
       decoration: BoxDecoration(
@@ -622,9 +724,36 @@ class _MovieDetailSheetState extends ConsumerState<_MovieDetailSheet> {
             ),
           ],
 
-          // Claim section (only for non-owners)
-          if (!isOwner) ...[
-            const SizedBox(height: 20),
+          // Claim / gifted section
+          const SizedBox(height: 20),
+          if (isGifted)
+            Container(
+              width: double.infinity,
+              padding:
+                  const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF7C3AED).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: const Color(0xFF7C3AED).withValues(alpha: 0.3)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.card_giftcard_rounded,
+                      color: Color(0xFF7C3AED), size: 18),
+                  SizedBox(width: 8),
+                  Text(
+                    'Already gifted',
+                    style: TextStyle(
+                      color: Color(0xFF7C3AED),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (!isOwner) ...[
             if (isClaimedByOther)
               Container(
                 width: double.infinity,
@@ -654,26 +783,51 @@ class _MovieDetailSheetState extends ConsumerState<_MovieDetailSheet> {
                 ),
               )
             else if (isClaimedByMe)
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _isClaiming ? null : _unclaim,
-                  icon: _isClaiming
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(
-                          Icons.check_circle_outline_rounded,
-                          size: 18,
-                        ),
-                  label: const Text('Unclaim'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF16A34A),
-                    side: const BorderSide(color: Color(0xFF16A34A)),
+              Column(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _isGifting ? null : _markGifted,
+                      icon: _isGifting
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.card_giftcard_rounded, size: 18),
+                      label: const Text('Mark as Gifted'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF7C3AED),
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _isClaiming ? null : _unclaim,
+                      icon: _isClaiming
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(
+                              Icons.check_circle_outline_rounded,
+                              size: 18,
+                            ),
+                      label: const Text('Unclaim'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF16A34A),
+                        side: const BorderSide(color: Color(0xFF16A34A)),
+                      ),
+                    ),
+                  ),
+                ],
               )
             else
               SizedBox(

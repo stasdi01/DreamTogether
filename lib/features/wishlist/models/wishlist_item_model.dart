@@ -33,6 +33,8 @@ class WishlistItem {
   final String? notes;
   final bool isClaimed;
   final String? claimedBy;
+  final bool isGifted;
+  final DateTime? giftedAt;
   final int orderIndex;
   final DateTime createdAt;
 
@@ -49,6 +51,8 @@ class WishlistItem {
     this.notes,
     required this.isClaimed,
     this.claimedBy,
+    required this.isGifted,
+    this.giftedAt,
     required this.orderIndex,
     required this.createdAt,
   });
@@ -73,6 +77,10 @@ class WishlistItem {
       notes: map['notes'] as String?,
       isClaimed: map['is_claimed'] as bool? ?? false,
       claimedBy: map['claimed_by'] as String?,
+      isGifted: map['is_gifted'] as bool? ?? false,
+      giftedAt: map['gifted_at'] != null
+          ? DateTime.parse(map['gifted_at'] as String)
+          : null,
       orderIndex: map['order_index'] as int? ?? 0,
       createdAt: DateTime.parse(map['created_at'] as String),
     );

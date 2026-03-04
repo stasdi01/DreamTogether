@@ -4,7 +4,7 @@ class ActivityItem {
   final String connectionName;
   final String? actorId;
   final String? actorName;
-  final String type; // 'item_added' | 'item_claimed' | 'member_joined'
+  final String type; // 'item_added' | 'item_claimed' | 'item_gifted' | 'member_joined'
   final Map<String, dynamic> payload;
   final DateTime createdAt;
 
@@ -44,6 +44,9 @@ class ActivityItem {
       case 'item_claimed':
         final title = payload['item_title'] as String?;
         return title != null ? 'claimed "$title"' : 'claimed an item';
+      case 'item_gifted':
+        final title = payload['item_title'] as String?;
+        return title != null ? 'gifted "$title"' : 'gave a gift';
       case 'member_joined':
         return 'joined $connectionName';
       default:

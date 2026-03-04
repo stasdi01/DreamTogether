@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/services/og_service.dart';
+import '../../../core/services/places_service.dart';
 import '../../../core/services/tmdb_service.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/providers/auth_provider.dart';
@@ -275,32 +276,57 @@ class _ConnectionDetailScreenState
             ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
           final isMyTab = member.userId == currentUserId;
 
-          if (memberItems.isEmpty) {
+          final activeItems =
+              memberItems.where((i) => !i.isGifted).toList();
+          final historyItems =
+              memberItems.where((i) => i.isGifted).toList();
+
+          if (activeItems.isEmpty && historyItems.isEmpty) {
             return _EmptyItemsState(
               isMyTab: isMyTab,
               onAdd: isMyTab ? () => _showAddSheet(context) : null,
             );
           }
 
-          return ListView.separated(
-            padding: EdgeInsets.fromLTRB(16, 16, 16, isMyTab ? 100 : 16),
-            itemCount: memberItems.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemBuilder: (_, i) => _ItemCard(
-              item: memberItems[i],
+          // Build a single scrollable list: active items + optional history section
+          final rows = <Widget>[];
+          for (int i = 0; i < activeItems.length; i++) {
+            if (i > 0) rows.add(const SizedBox(height: 8));
+            rows.add(_ItemCard(
+              item: activeItems[i],
               isOwner: isMyTab,
               onTap: isMyTab
-                  ? () => _showEditSheet(context, memberItems[i])
-                  : () => _showItemDetail(context, memberItems[i]),
+                  ? () => _showEditSheet(context, activeItems[i])
+                  : () => _showItemDetail(context, activeItems[i]),
               onDelete: isMyTab
                   ? () async {
                       await ref.read(wishlistActionsProvider).deleteItem(
-                            memberItems[i].id,
+                            activeItems[i].id,
                             widget.connectionId,
                           );
                     }
                   : null,
-            ),
+            ));
+          }
+
+          if (historyItems.isNotEmpty) {
+            rows.add(const SizedBox(height: 24));
+            rows.add(_HistorySectionHeader(count: historyItems.length));
+            for (final h in historyItems) {
+              rows.add(const SizedBox(height: 8));
+              rows.add(_ItemCard(
+                item: h,
+                isOwner: false,
+                dimmed: true,
+                onTap: null,
+                onDelete: null,
+              ));
+            }
+          }
+
+          return ListView(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, isMyTab ? 100 : 16),
+            children: rows,
           );
         }).toList(),
       ),
@@ -375,17 +401,50 @@ class _EmptyItemsState extends StatelessWidget {
   }
 }
 
+// ── History section header ────────────────────────────────────────────────────
+
+class _HistorySectionHeader extends StatelessWidget {
+  final int count;
+  const _HistorySectionHeader({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Icon(Icons.history_rounded,
+            size: 16, color: theme.colorScheme.onSurfaceVariant),
+        const SizedBox(width: 6),
+        Text(
+          'History ($count)',
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.5,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Divider(color: theme.colorScheme.outlineVariant),
+        ),
+      ],
+    );
+  }
+}
+
 // ── Item card with swipe-to-delete ────────────────────────────────────────────
 
 class _ItemCard extends StatelessWidget {
   final WishlistItem item;
   final bool isOwner;
+  final bool dimmed;
   final VoidCallback? onTap;
   final Future<void> Function()? onDelete;
 
   const _ItemCard({
     required this.item,
     required this.isOwner,
+    this.dimmed = false,
     this.onTap,
     this.onDelete,
   });
@@ -468,13 +527,20 @@ class _ItemCard extends StatelessWidget {
                     ),
                     if (item.linkUrl != null ||
                         item.notes != null ||
-                        (!isOwner && item.isClaimed)) ...[
+                        item.isGifted ||
+                        (!isOwner && item.isClaimed && !item.isGifted)) ...[
                       const SizedBox(height: 6),
                       Wrap(
                         spacing: 6,
                         runSpacing: 4,
                         children: [
-                          if (!isOwner && item.isClaimed)
+                          if (item.isGifted)
+                            _SmallChip(
+                              icon: Icons.card_giftcard_rounded,
+                              label: 'Gifted',
+                              color: const Color(0xFF7C3AED),
+                            )
+                          else if (!isOwner && item.isClaimed)
                             _SmallChip(
                               icon: Icons.check_circle_rounded,
                               label: 'Claimed',
@@ -513,6 +579,8 @@ class _ItemCard extends StatelessWidget {
       ),
     );
 
+    final cardWidget = dimmed ? Opacity(opacity: 0.5, child: card) : card;
+
     if (isOwner && onDelete != null) {
       return Dismissible(
         key: Key(item.id),
@@ -549,11 +617,11 @@ class _ItemCard extends StatelessWidget {
           );
         },
         onDismissed: (_) => onDelete!(),
-        child: card,
+        child: cardWidget,
       );
     }
 
-    return card;
+    return cardWidget;
   }
 
   Widget _iconBubble() => Container(
@@ -686,6 +754,12 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
   bool _tmdbLoading = false;
   Timer? _debounce;
 
+  // Places search state
+  List<PlaceResult> _placeSuggestions = [];
+  bool _placeLoading = false;
+  Timer? _placeDebounce;
+  PlaceResult? _selectedPlace;
+
   // OpenGraph link-preview state
   OgResult? _ogResult;
   bool _ogLoading = false;
@@ -709,6 +783,7 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _placeDebounce?.cancel();
     _ogDebounce?.cancel();
     _titleCtrl.dispose();
     _priceCtrl.dispose();
@@ -718,34 +793,63 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
   }
 
   void _onTitleChanged(String val) {
-    if (_category != ItemCategory.movie) return;
-    _debounce?.cancel();
-    if (val.trim().length < 2) {
-      setState(() {
-        _tmdbSuggestions = [];
-        _tmdbLoading = false;
-      });
-      return;
-    }
-    setState(() => _tmdbLoading = true);
-    _debounce = Timer(const Duration(milliseconds: 500), () async {
-      try {
-        final results = await TmdbService().search(val.trim());
-        if (mounted) {
-          setState(() {
-            _tmdbSuggestions = results;
-            _tmdbLoading = false;
-          });
-        }
-      } catch (_) {
-        if (mounted) {
-          setState(() {
-            _tmdbSuggestions = [];
-            _tmdbLoading = false;
-          });
-        }
+    if (_category == ItemCategory.movie) {
+      _debounce?.cancel();
+      if (val.trim().length < 2) {
+        setState(() {
+          _tmdbSuggestions = [];
+          _tmdbLoading = false;
+        });
+        return;
       }
-    });
+      setState(() => _tmdbLoading = true);
+      _debounce = Timer(const Duration(milliseconds: 500), () async {
+        try {
+          final results = await TmdbService().search(val.trim());
+          if (mounted) {
+            setState(() {
+              _tmdbSuggestions = results;
+              _tmdbLoading = false;
+            });
+          }
+        } catch (_) {
+          if (mounted) {
+            setState(() {
+              _tmdbSuggestions = [];
+              _tmdbLoading = false;
+            });
+          }
+        }
+      });
+    } else if (_category == ItemCategory.place) {
+      _placeDebounce?.cancel();
+      if (val.trim().length < 2) {
+        setState(() {
+          _placeSuggestions = [];
+          _placeLoading = false;
+        });
+        return;
+      }
+      setState(() => _placeLoading = true);
+      _placeDebounce = Timer(const Duration(milliseconds: 500), () async {
+        try {
+          final results = await PlacesService().autocomplete(val.trim());
+          if (mounted) {
+            setState(() {
+              _placeSuggestions = results;
+              _placeLoading = false;
+            });
+          }
+        } catch (_) {
+          if (mounted) {
+            setState(() {
+              _placeSuggestions = [];
+              _placeLoading = false;
+            });
+          }
+        }
+      });
+    }
   }
 
   void _selectTmdbResult(TmdbResult result) {
@@ -757,6 +861,36 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
       _imageUrl = result.posterUrl;
       _tmdbSuggestions = [];
       _tmdbLoading = false;
+    });
+  }
+
+  Future<void> _selectPlaceResult(PlaceResult place) async {
+    _titleCtrl.text = place.name;
+    setState(() {
+      _placeSuggestions = [];
+      _placeLoading = true;
+      _selectedPlace = null;
+    });
+
+    final detail = await PlacesService().details(place.placeId, place.name);
+    if (!mounted) return;
+
+    final resolved = detail ?? place;
+
+    // Auto-fill notes with address + rating if notes are empty
+    if (_notesCtrl.text.isEmpty) {
+      final parts = <String>[];
+      if (resolved.address != null) parts.add(resolved.address!);
+      if (resolved.rating != null) {
+        parts.add('⭐ ${resolved.rating!.toStringAsFixed(1)} / 5');
+      }
+      if (parts.isNotEmpty) _notesCtrl.text = parts.join('\n');
+    }
+
+    setState(() {
+      _imageUrl = resolved.photoUrl;
+      _selectedPlace = resolved;
+      _placeLoading = false;
     });
   }
 
@@ -962,6 +1096,47 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
                   onSelect: _selectTmdbResult,
                 ),
               ],
+            ] else if (_category == ItemCategory.place) ...[
+              if (_selectedPlace != null && _imageUrl != null) ...[
+                _SelectedPlacePreview(
+                  place: _selectedPlace!,
+                  imageUrl: _imageUrl!,
+                  onClear: () => setState(() {
+                    _selectedPlace = null;
+                    _imageUrl = null;
+                    _titleCtrl.clear();
+                    _notesCtrl.clear();
+                  }),
+                ),
+                const SizedBox(height: 12),
+              ],
+              TextField(
+                controller: _titleCtrl,
+                onChanged: _onTitleChanged,
+                autofocus: widget.item == null,
+                textCapitalization: TextCapitalization.sentences,
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  hintText: 'Search for a place…',
+                  prefixIcon: _placeLoading
+                      ? const Padding(
+                          padding: EdgeInsets.all(14),
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : const Icon(Icons.place_outlined),
+                ),
+              ),
+              if (_placeSuggestions.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                _PlaceSuggestions(
+                  suggestions: _placeSuggestions,
+                  onSelect: _selectPlaceResult,
+                ),
+              ],
             ] else ...[
               TextField(
                 controller: _titleCtrl,
@@ -992,6 +1167,12 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
                     _tmdbSuggestions = [];
                     _tmdbLoading = false;
                     _debounce?.cancel();
+                  }
+                  if (c != ItemCategory.place) {
+                    _placeSuggestions = [];
+                    _placeLoading = false;
+                    _placeDebounce?.cancel();
+                    _selectedPlace = null;
                   }
                 });
               },
@@ -1343,6 +1524,167 @@ class _SelectedPosterPreview extends StatelessWidget {
   }
 }
 
+// ── Places suggestions dropdown ───────────────────────────────────────────────
+
+class _PlaceSuggestions extends StatelessWidget {
+  final List<PlaceResult> suggestions;
+  final ValueChanged<PlaceResult> onSelect;
+
+  const _PlaceSuggestions(
+      {required this.suggestions, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(12),
+      color: isDark ? AppTheme.darkSurfaceElevated : Colors.white,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: suggestions.map((p) {
+            return InkWell(
+              onTap: () => onSelect(p),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: AppTheme.brightPurple.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.place_rounded,
+                          size: 18, color: AppTheme.brightPurple),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            p.name,
+                            style: theme.textTheme.bodyMedium
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (p.address != null)
+                            Text(
+                              p.address!,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Selected place preview ────────────────────────────────────────────────────
+
+class _SelectedPlacePreview extends StatelessWidget {
+  final PlaceResult place;
+  final String imageUrl;
+  final VoidCallback onClear;
+
+  const _SelectedPlacePreview({
+    required this.place,
+    required this.imageUrl,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.network(
+            imageUrl,
+            width: 78,
+            height: 52,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
+              width: 78,
+              height: 52,
+              decoration: BoxDecoration(
+                color: AppTheme.brightPurple.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.place_rounded,
+                  color: AppTheme.brightPurple),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                place.name,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w600),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (place.address != null)
+                Text(
+                  place.address!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              if (place.rating != null)
+                Row(
+                  children: [
+                    const Icon(Icons.star_rounded,
+                        size: 12, color: Colors.amber),
+                    const SizedBox(width: 2),
+                    Text(
+                      place.rating!.toStringAsFixed(1),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.close_rounded, size: 18),
+          color: theme.colorScheme.onSurfaceVariant,
+          onPressed: onClear,
+          tooltip: 'Remove place',
+        ),
+      ],
+    );
+  }
+}
+
 // ── OpenGraph link preview card ───────────────────────────────────────────────
 
 class _OgPreviewCard extends StatelessWidget {
@@ -1503,6 +1845,7 @@ class _ItemDetailSheet extends ConsumerStatefulWidget {
 
 class _ItemDetailSheetState extends ConsumerState<_ItemDetailSheet> {
   bool _isClaiming = false;
+  bool _isGifting = false;
 
   Future<void> _claim() async {
     setState(() => _isClaiming = true);
@@ -1538,6 +1881,23 @@ class _ItemDetailSheetState extends ConsumerState<_ItemDetailSheet> {
     }
   }
 
+  Future<void> _markGifted() async {
+    setState(() => _isGifting = true);
+    try {
+      await ref
+          .read(wishlistActionsProvider)
+          .markItemGifted(widget.item.id, widget.item.connectionId);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _isGifting = false);
+    }
+  }
+
   String? _claimedByName() {
     if (widget.item.claimedBy == null) return null;
     final matches =
@@ -1555,6 +1915,7 @@ class _ItemDetailSheetState extends ConsumerState<_ItemDetailSheet> {
     final isClaimedByMe = item.isClaimed && item.claimedBy == currentUserId;
     final isClaimedByOther =
         item.isClaimed && item.claimedBy != currentUserId;
+    final isGifted = item.isGifted;
 
     return Container(
       decoration: BoxDecoration(
@@ -1709,31 +2070,57 @@ class _ItemDetailSheetState extends ConsumerState<_ItemDetailSheet> {
             ),
           ],
 
-          // Claim section
+          // Claim / gifted section
           const SizedBox(height: 20),
-          if (isClaimedByOther)
+          if (isGifted)
+            _GiftedBanner(name: _claimedByName())
+          else if (isClaimedByOther)
             _ClaimedBanner(name: _claimedByName())
           else if (isClaimedByMe)
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: _isClaiming ? null : _unclaim,
-                icon: _isClaiming
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(
-                        Icons.check_circle_outline_rounded,
-                        size: 18,
-                      ),
-                label: const Text('Unclaim'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF16A34A),
-                  side: const BorderSide(color: Color(0xFF16A34A)),
+            Column(
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _isGifting ? null : _markGifted,
+                    icon: _isGifting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.card_giftcard_rounded, size: 18),
+                    label: const Text('Mark as Gifted'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF7C3AED),
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _isClaiming ? null : _unclaim,
+                    icon: _isClaiming
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(
+                            Icons.check_circle_outline_rounded,
+                            size: 18,
+                          ),
+                    label: const Text('Unclaim'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF16A34A),
+                      side: const BorderSide(color: Color(0xFF16A34A)),
+                    ),
+                  ),
+                ),
+              ],
             )
           else
             SizedBox(
@@ -1846,6 +2233,42 @@ class _ClaimedBanner extends StatelessWidget {
             name != null ? 'Claimed by $name' : 'Already claimed',
             style: const TextStyle(
               color: Color(0xFF16A34A),
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Gifted banner ─────────────────────────────────────────────────────────────
+
+class _GiftedBanner extends StatelessWidget {
+  final String? name;
+  const _GiftedBanner({this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF7C3AED).withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border:
+            Border.all(color: const Color(0xFF7C3AED).withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.card_giftcard_rounded,
+              color: Color(0xFF7C3AED), size: 18),
+          const SizedBox(width: 8),
+          Text(
+            name != null ? 'Gifted by $name' : 'Already gifted',
+            style: const TextStyle(
+              color: Color(0xFF7C3AED),
               fontWeight: FontWeight.w600,
               fontSize: 14,
             ),

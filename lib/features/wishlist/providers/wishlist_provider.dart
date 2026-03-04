@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../connections/models/connection_model.dart';
+import '../../connections/providers/activity_provider.dart';
 import '../../movies/providers/movies_provider.dart';
 import '../models/wishlist_item_model.dart';
 
@@ -78,12 +79,15 @@ class WishlistActions {
       'p_notes': notes,
     });
     ref.invalidate(wishlistItemsProvider(connectionId));
+    ref.invalidate(allMovieItemsProvider);
+    ref.invalidate(activityFeedProvider);
   }
 
   /// Deletes an item the current user owns via SECURITY DEFINER RPC.
   Future<void> deleteItem(String itemId, String connectionId) async {
     await client.rpc('delete_wishlist_item', params: {'p_item_id': itemId});
     ref.invalidate(wishlistItemsProvider(connectionId));
+    ref.invalidate(allMovieItemsProvider);
   }
 
   /// Updates an item the current user owns via SECURITY DEFINER RPC.
@@ -108,6 +112,7 @@ class WishlistActions {
       'p_notes': notes,
     });
     ref.invalidate(wishlistItemsProvider(item.connectionId));
+    ref.invalidate(allMovieItemsProvider);
   }
 
   /// Claims an item (signals intent to gift it to the owner).
@@ -115,6 +120,7 @@ class WishlistActions {
     await client.rpc('claim_wishlist_item', params: {'p_item_id': itemId});
     ref.invalidate(wishlistItemsProvider(connectionId));
     ref.invalidate(allMovieItemsProvider);
+    ref.invalidate(activityFeedProvider);
   }
 
   /// Removes a claim placed by the current user.
@@ -122,5 +128,13 @@ class WishlistActions {
     await client.rpc('unclaim_wishlist_item', params: {'p_item_id': itemId});
     ref.invalidate(wishlistItemsProvider(connectionId));
     ref.invalidate(allMovieItemsProvider);
+  }
+
+  /// Marks a claimed item as gifted (moves it to history).
+  Future<void> markItemGifted(String itemId, String connectionId) async {
+    await client.rpc('mark_item_gifted', params: {'p_item_id': itemId});
+    ref.invalidate(wishlistItemsProvider(connectionId));
+    ref.invalidate(allMovieItemsProvider);
+    ref.invalidate(activityFeedProvider);
   }
 }
