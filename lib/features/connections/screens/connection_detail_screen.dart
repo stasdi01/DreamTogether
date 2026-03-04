@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/services/og_service.dart';
+import '../../../core/services/tmdb_service.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../wishlist/models/wishlist_item_model.dart';
@@ -398,21 +401,24 @@ class _ItemCard extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Row(
+            crossAxisAlignment: item.imageUrl != null
+                ? CrossAxisAlignment.start
+                : CrossAxisAlignment.center,
             children: [
-              // Category icon bubble
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: _categoryColor(item.category).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  _categoryIcon(item.category),
-                  color: _categoryColor(item.category),
-                  size: 22,
-                ),
-              ),
+              // Poster thumbnail or category icon bubble
+              if (item.imageUrl != null)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.network(
+                    item.imageUrl!,
+                    width: 46,
+                    height: 66,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _iconBubble(),
+                  ),
+                )
+              else
+                _iconBubble(),
               const SizedBox(width: 12),
 
               // Content
@@ -476,8 +482,8 @@ class _ItemCard extends StatelessWidget {
                             ),
                           if (item.linkUrl != null)
                             _SmallChip(
-                              icon: Icons.link_rounded,
-                              label: 'Link',
+                              icon: Icons.language_rounded,
+                              label: domainFromUrl(item.linkUrl!),
                               color: AppTheme.brightPurple,
                             ),
                           if (item.notes != null)
@@ -549,6 +555,20 @@ class _ItemCard extends StatelessWidget {
 
     return card;
   }
+
+  Widget _iconBubble() => Container(
+        width: 46,
+        height: 46,
+        decoration: BoxDecoration(
+          color: _categoryColor(item.category).withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(
+          _categoryIcon(item.category),
+          color: _categoryColor(item.category),
+          size: 22,
+        ),
+      );
 
   IconData _categoryIcon(ItemCategory cat) {
     switch (cat) {
@@ -658,7 +678,18 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
 
   ItemCategory _category = ItemCategory.product;
   ItemPriority _priority = ItemPriority.medium;
+  String? _imageUrl;
   bool _isLoading = false;
+
+  // TMDB search state
+  List<TmdbResult> _tmdbSuggestions = [];
+  bool _tmdbLoading = false;
+  Timer? _debounce;
+
+  // OpenGraph link-preview state
+  OgResult? _ogResult;
+  bool _ogLoading = false;
+  Timer? _ogDebounce;
 
   @override
   void initState() {
@@ -671,16 +702,97 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
       _notesCtrl.text = item.notes ?? '';
       _category = item.category;
       _priority = item.priority;
+      _imageUrl = item.imageUrl;
     }
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
+    _ogDebounce?.cancel();
     _titleCtrl.dispose();
     _priceCtrl.dispose();
     _linkCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
+  }
+
+  void _onTitleChanged(String val) {
+    if (_category != ItemCategory.movie) return;
+    _debounce?.cancel();
+    if (val.trim().length < 2) {
+      setState(() {
+        _tmdbSuggestions = [];
+        _tmdbLoading = false;
+      });
+      return;
+    }
+    setState(() => _tmdbLoading = true);
+    _debounce = Timer(const Duration(milliseconds: 500), () async {
+      try {
+        final results = await TmdbService().search(val.trim());
+        if (mounted) {
+          setState(() {
+            _tmdbSuggestions = results;
+            _tmdbLoading = false;
+          });
+        }
+      } catch (_) {
+        if (mounted) {
+          setState(() {
+            _tmdbSuggestions = [];
+            _tmdbLoading = false;
+          });
+        }
+      }
+    });
+  }
+
+  void _selectTmdbResult(TmdbResult result) {
+    _titleCtrl.text = result.title;
+    if (_notesCtrl.text.isEmpty && result.overview != null) {
+      _notesCtrl.text = result.overview!;
+    }
+    setState(() {
+      _imageUrl = result.posterUrl;
+      _tmdbSuggestions = [];
+      _tmdbLoading = false;
+    });
+  }
+
+  void _onLinkChanged(String val) {
+    _ogDebounce?.cancel();
+    final trimmed = val.trim();
+    if (trimmed.length < 8) {
+      // too short to be a real URL
+      if (_ogResult != null || _ogLoading) {
+        setState(() {
+          _ogResult = null;
+          _ogLoading = false;
+        });
+      }
+      return;
+    }
+    setState(() {
+      _ogResult = null;
+      _ogLoading = true;
+    });
+    _ogDebounce = Timer(const Duration(milliseconds: 900), () async {
+      final result = await OgService().fetch(trimmed);
+      if (mounted) setState(() {
+        _ogResult = result;
+        _ogLoading = false;
+      });
+    });
+  }
+
+  void _applyOg(OgResult og) {
+    if (_titleCtrl.text.trim().isEmpty && og.title != null) {
+      _titleCtrl.text = og.title!;
+    }
+    if (_imageUrl == null && og.imageUrl != null) {
+      setState(() => _imageUrl = og.imageUrl);
+    }
   }
 
   Future<void> _save() async {
@@ -703,6 +815,7 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
           title: title,
           category: _category,
           priority: _priority,
+          imageUrl: _imageUrl,
           price: price,
           linkUrl: link,
           notes: notes,
@@ -713,6 +826,7 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
           title: title,
           category: _category,
           priority: _priority,
+          imageUrl: _imageUrl,
           price: price,
           linkUrl: link,
           notes: notes,
@@ -726,6 +840,45 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _delete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete item?'),
+        content: Text('Remove "${widget.item!.title}" from your list?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: Color(0xFFEF4444)),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isLoading = true);
+    try {
+      await ref.read(wishlistActionsProvider).deleteItem(
+            widget.item!.id,
+            widget.connectionId,
+          );
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -771,17 +924,56 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
             ),
             const SizedBox(height: 20),
 
-            // Title
-            TextField(
-              controller: _titleCtrl,
-              autofocus: true,
-              textCapitalization: TextCapitalization.sentences,
-              textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(
-                hintText: 'What do you want?',
-                prefixIcon: Icon(Icons.edit_outlined),
+            // Title / TMDB search
+            if (_category == ItemCategory.movie) ...[
+              if (_imageUrl != null) ...[
+                _SelectedPosterPreview(
+                  imageUrl: _imageUrl!,
+                  title: _titleCtrl.text,
+                  onClear: () => setState(() => _imageUrl = null),
+                ),
+                const SizedBox(height: 12),
+              ],
+              TextField(
+                controller: _titleCtrl,
+                onChanged: _onTitleChanged,
+                autofocus: widget.item == null,
+                textCapitalization: TextCapitalization.sentences,
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  hintText: 'Search movie or TV show…',
+                  prefixIcon: _tmdbLoading
+                      ? const Padding(
+                          padding: EdgeInsets.all(14),
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : const Icon(Icons.search_rounded),
+                ),
               ),
-            ),
+              if (_tmdbSuggestions.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                _TmdbSuggestions(
+                  suggestions: _tmdbSuggestions,
+                  onSelect: _selectTmdbResult,
+                ),
+              ],
+            ] else ...[
+              TextField(
+                controller: _titleCtrl,
+                autofocus: widget.item == null,
+                textCapitalization: TextCapitalization.sentences,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  hintText: 'What do you want?',
+                  prefixIcon: Icon(Icons.edit_outlined),
+                ),
+              ),
+            ],
             const SizedBox(height: 20),
 
             // Category
@@ -793,7 +985,16 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
             const SizedBox(height: 8),
             _CategoryPicker(
               selected: _category,
-              onChanged: (c) => setState(() => _category = c),
+              onChanged: (c) {
+                setState(() {
+                  _category = c;
+                  if (c != ItemCategory.movie) {
+                    _tmdbSuggestions = [];
+                    _tmdbLoading = false;
+                    _debounce?.cancel();
+                  }
+                });
+              },
             ),
             const SizedBox(height: 20),
 
@@ -831,11 +1032,30 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
               controller: _linkCtrl,
               keyboardType: TextInputType.url,
               textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(
+              onChanged: _onLinkChanged,
+              decoration: InputDecoration(
                 hintText: 'Link (optional)',
-                prefixIcon: Icon(Icons.link_rounded),
+                prefixIcon: const Icon(Icons.link_rounded),
+                suffixIcon: _ogLoading
+                    ? const Padding(
+                        padding: EdgeInsets.all(14),
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : null,
               ),
             ),
+            if (_ogResult != null) ...[
+              const SizedBox(height: 8),
+              _OgPreviewCard(
+                og: _ogResult!,
+                onApply: () => _applyOg(_ogResult!),
+                onDismiss: () => setState(() => _ogResult = null),
+              ),
+            ],
             const SizedBox(height: 12),
 
             // Notes
@@ -862,6 +1082,18 @@ class _AddEditItemSheetState extends ConsumerState<_AddEditItemSheet> {
                     )
                   : Text(isEdit ? 'Save changes' : 'Add to list'),
             ),
+            if (isEdit) ...[
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: _isLoading ? null : _delete,
+                icon: const Icon(Icons.delete_outline_rounded,
+                    color: Color(0xFFEF4444), size: 18),
+                label: const Text(
+                  'Delete item',
+                  style: TextStyle(color: Color(0xFFEF4444)),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -904,6 +1136,325 @@ class _CategoryPicker extends StatelessWidget {
       case ItemCategory.experience:
         return Icons.auto_awesome_outlined;
     }
+  }
+}
+
+// ── TMDB suggestion dropdown ──────────────────────────────────────────────────
+
+class _TmdbSuggestions extends StatelessWidget {
+  final List<TmdbResult> suggestions;
+  final ValueChanged<TmdbResult> onSelect;
+
+  const _TmdbSuggestions(
+      {required this.suggestions, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(12),
+      color: isDark ? AppTheme.darkSurfaceElevated : Colors.white,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: suggestions.map((r) {
+            return InkWell(
+              onTap: () => onSelect(r),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    // Thumbnail
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: r.thumbnailUrl != null
+                          ? Image.network(
+                              r.thumbnailUrl!,
+                              width: 32,
+                              height: 46,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) =>
+                                  _fallbackThumb(),
+                            )
+                          : _fallbackThumb(),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            r.title,
+                            style: theme.textTheme.bodyMedium
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              if (r.year != null)
+                                Text(
+                                  r.year!,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color:
+                                        theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              if (r.year != null && r.voteAverage != null)
+                                Text(
+                                  ' · ',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color:
+                                        theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              if (r.voteAverage != null) ...[
+                                const Icon(Icons.star_rounded,
+                                    size: 11, color: Colors.amber),
+                                const SizedBox(width: 2),
+                                Text(
+                                  r.voteAverage!.toStringAsFixed(1),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color:
+                                        theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                              if (r.mediaType == 'tv') ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 4, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.brightPurple
+                                        .withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    'TV',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      color: AppTheme.brightPurple,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _fallbackThumb() => Container(
+        width: 32,
+        height: 46,
+        decoration: BoxDecoration(
+          color: AppTheme.brightPurple.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: const Icon(Icons.movie_outlined,
+            size: 16, color: AppTheme.brightPurple),
+      );
+}
+
+// ── Selected TMDB poster preview ──────────────────────────────────────────────
+
+class _SelectedPosterPreview extends StatelessWidget {
+  final String imageUrl;
+  final String title;
+  final VoidCallback onClear;
+
+  const _SelectedPosterPreview({
+    required this.imageUrl,
+    required this.title,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.network(
+            imageUrl,
+            width: 52,
+            height: 78,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
+              width: 52,
+              height: 78,
+              decoration: BoxDecoration(
+                color: AppTheme.brightPurple.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.movie_outlined,
+                  color: AppTheme.brightPurple),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w600),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Tap search to change',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.close_rounded, size: 18),
+          color: theme.colorScheme.onSurfaceVariant,
+          onPressed: onClear,
+          tooltip: 'Remove poster',
+        ),
+      ],
+    );
+  }
+}
+
+// ── OpenGraph link preview card ───────────────────────────────────────────────
+
+class _OgPreviewCard extends StatelessWidget {
+  final OgResult og;
+  final VoidCallback onApply;
+  final VoidCallback onDismiss;
+
+  const _OgPreviewCard({
+    required this.og,
+    required this.onApply,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final hasContent = og.title != null || og.imageUrl != null;
+
+    if (!hasContent) {
+      // Domain-only fallback — just show a quiet badge, no "Use this" button
+      return Row(
+        children: [
+          Icon(Icons.language_rounded,
+              size: 14, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Text(
+            og.domain,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.darkSurfaceElevated : AppTheme.lightSurfaceCard,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.colorScheme.outline),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Thumbnail
+          if (og.imageUrl != null)
+            ClipRRect(
+              borderRadius:
+                  const BorderRadius.horizontal(left: Radius.circular(12)),
+              child: Image.network(
+                og.imageUrl!,
+                width: 72,
+                height: 72,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
+            ),
+          // Text
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 10, 6, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    og.domain,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: AppTheme.brightPurple,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (og.title != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      og.title!,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      GestureDetector(
+                        onTap: onApply,
+                        child: Text(
+                          'Use this info',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: AppTheme.brightPurple,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Dismiss
+          IconButton(
+            icon: const Icon(Icons.close_rounded, size: 16),
+            color: theme.colorScheme.onSurfaceVariant,
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(),
+            onPressed: onDismiss,
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -1028,7 +1579,24 @@ class _ItemDetailSheetState extends ConsumerState<_ItemDetailSheet> {
               ),
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
+
+          // Poster image (if available)
+          if (item.imageUrl != null) ...[
+            Center(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.network(
+                  item.imageUrl!,
+                  height: 160,
+                  fit: BoxFit.fitHeight,
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ] else
+            const SizedBox(height: 8),
 
           // Category + Priority row
           Row(
@@ -1105,36 +1673,7 @@ class _ItemDetailSheetState extends ConsumerState<_ItemDetailSheet> {
           // Link
           if (item.linkUrl != null) ...[
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Icon(Icons.link_rounded,
-                    size: 16, color: theme.colorScheme.onSurfaceVariant),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    item.linkUrl!,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: AppTheme.brightPurple,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.copy_rounded, size: 16),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  color: theme.colorScheme.onSurfaceVariant,
-                  tooltip: 'Copy link',
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: item.linkUrl!));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Link copied')),
-                    );
-                  },
-                ),
-              ],
-            ),
+            _LinkPreviewRow(url: item.linkUrl!),
           ],
 
           // Notes
@@ -1313,6 +1852,86 @@ class _ClaimedBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ── Link preview row (used in detail sheets) ──────────────────────────────────
+
+class _LinkPreviewRow extends StatefulWidget {
+  final String url;
+  const _LinkPreviewRow({required this.url});
+
+  @override
+  State<_LinkPreviewRow> createState() => _LinkPreviewRowState();
+}
+
+class _LinkPreviewRowState extends State<_LinkPreviewRow> {
+  bool _copied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final domain = domainFromUrl(widget.url);
+
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: AppTheme.brightPurple.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: AppTheme.brightPurple.withValues(alpha: 0.25)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.language_rounded,
+                  size: 13, color: AppTheme.brightPurple),
+              const SizedBox(width: 5),
+              Text(
+                domain,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.brightPurple,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Spacer(),
+        GestureDetector(
+          onTap: () async {
+            await Clipboard.setData(ClipboardData(text: widget.url));
+            setState(() => _copied = true);
+            await Future.delayed(const Duration(seconds: 2));
+            if (mounted) setState(() => _copied = false);
+          },
+          child: Row(
+            children: [
+              Icon(
+                _copied ? Icons.check_rounded : Icons.copy_rounded,
+                size: 14,
+                color: _copied
+                    ? const Color(0xFF16A34A)
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                _copied ? 'Copied' : 'Copy link',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: _copied
+                      ? const Color(0xFF16A34A)
+                      : theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

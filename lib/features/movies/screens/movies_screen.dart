@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/services/og_service.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/home/screens/main_shell.dart';
@@ -184,22 +185,24 @@ class _MovieCard extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: item.imageUrl != null
+                ? CrossAxisAlignment.start
+                : CrossAxisAlignment.center,
             children: [
-              // Movie icon
-              Container(
-                width: 50,
-                height: 50,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEA580C).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.movie_outlined,
-                  color: Color(0xFFEA580C),
-                  size: 24,
-                ),
-              ),
+              // Poster thumbnail or movie icon
+              if (item.imageUrl != null)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.network(
+                    item.imageUrl!,
+                    width: 50,
+                    height: 72,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _movieIconBubble(),
+                  ),
+                )
+              else
+                _movieIconBubble(),
               const SizedBox(width: 12),
 
               // Content
@@ -308,6 +311,20 @@ class _MovieCard extends StatelessWidget {
   }
 }
 
+Widget _movieIconBubble() => Container(
+      width: 50,
+      height: 50,
+      decoration: BoxDecoration(
+        color: const Color(0xFFEA580C).withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Icon(
+        Icons.movie_outlined,
+        color: Color(0xFFEA580C),
+        size: 24,
+      ),
+    );
+
 // ── Priority dot ──────────────────────────────────────────────────────────────
 
 class _PriorityDot extends StatelessWidget {
@@ -350,7 +367,6 @@ class _MovieDetailSheet extends ConsumerStatefulWidget {
 }
 
 class _MovieDetailSheetState extends ConsumerState<_MovieDetailSheet> {
-  bool _linkCopied = false;
   bool _isClaiming = false;
 
   Future<void> _claim() async {
@@ -424,7 +440,24 @@ class _MovieDetailSheetState extends ConsumerState<_MovieDetailSheet> {
               ),
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
+
+          // Poster image (if available)
+          if (item.imageUrl != null) ...[
+            Center(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.network(
+                  item.imageUrl!,
+                  height: 180,
+                  fit: BoxFit.fitHeight,
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ] else
+            const SizedBox(height: 8),
 
           // Category badge + priority
           Row(
@@ -555,43 +588,7 @@ class _MovieDetailSheetState extends ConsumerState<_MovieDetailSheet> {
           // Link
           if (item.linkUrl != null) ...[
             const SizedBox(height: 14),
-            Row(
-              children: [
-                Icon(Icons.link_rounded,
-                    size: 16, color: theme.colorScheme.onSurfaceVariant),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    item.linkUrl!,
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(color: AppTheme.brightPurple),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () async {
-                    await Clipboard.setData(
-                        ClipboardData(text: item.linkUrl!));
-                    setState(() => _linkCopied = true);
-                    await Future.delayed(const Duration(seconds: 2));
-                    if (mounted) setState(() => _linkCopied = false);
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: Icon(
-                      _linkCopied
-                          ? Icons.check_rounded
-                          : Icons.copy_rounded,
-                      size: 16,
-                      color: _linkCopied
-                          ? const Color(0xFF16A34A)
-                          : theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            _MovieLinkRow(url: item.linkUrl!),
           ],
 
           // Notes
@@ -735,5 +732,85 @@ class _MovieDetailSheetState extends ConsumerState<_MovieDetailSheet> {
       case ItemPriority.high:
         return 'High priority';
     }
+  }
+}
+
+// ── Movie link row ─────────────────────────────────────────────────────────────
+
+class _MovieLinkRow extends StatefulWidget {
+  final String url;
+  const _MovieLinkRow({required this.url});
+
+  @override
+  State<_MovieLinkRow> createState() => _MovieLinkRowState();
+}
+
+class _MovieLinkRowState extends State<_MovieLinkRow> {
+  bool _copied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final domain = domainFromUrl(widget.url);
+
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: AppTheme.brightPurple.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: AppTheme.brightPurple.withValues(alpha: 0.25)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.language_rounded,
+                  size: 13, color: AppTheme.brightPurple),
+              const SizedBox(width: 5),
+              Text(
+                domain,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.brightPurple,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Spacer(),
+        GestureDetector(
+          onTap: () async {
+            await Clipboard.setData(ClipboardData(text: widget.url));
+            setState(() => _copied = true);
+            await Future.delayed(const Duration(seconds: 2));
+            if (mounted) setState(() => _copied = false);
+          },
+          child: Row(
+            children: [
+              Icon(
+                _copied ? Icons.check_rounded : Icons.copy_rounded,
+                size: 14,
+                color: _copied
+                    ? const Color(0xFF16A34A)
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                _copied ? 'Copied' : 'Copy link',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: _copied
+                      ? const Color(0xFF16A34A)
+                      : theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }

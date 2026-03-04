@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../features/home/screens/main_shell.dart';
+import '../models/activity_item_model.dart';
 import '../models/connection_model.dart';
+import '../providers/activity_provider.dart';
 import '../providers/connections_provider.dart';
 
 class ConnectionsScreen extends ConsumerWidget {
@@ -25,9 +27,10 @@ class ConnectionsScreen extends ConsumerWidget {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => _ErrorState(message: e.toString()),
         data: (connections) => connections.isEmpty
-            ? _EmptyState(onCreateTap: () => _showCreateSheet(context, ref),
+            ? _EmptyState(
+                onCreateTap: () => _showCreateSheet(context, ref),
                 onJoinTap: () => _showJoinSheet(context, ref))
-            : _ConnectionsList(
+            : _HomeBody(
                 connections: connections,
                 onCreateTap: () => _showCreateSheet(context, ref),
                 onJoinTap: () => _showJoinSheet(context, ref),
@@ -51,6 +54,251 @@ class ConnectionsScreen extends ConsumerWidget {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _JoinConnectionSheet(ref: ref),
+    );
+  }
+}
+
+// ── Home body (connections + activity feed) ───────────────────────────────────
+
+class _HomeBody extends ConsumerWidget {
+  final List<ConnectionModel> connections;
+  final VoidCallback onCreateTap;
+  final VoidCallback onJoinTap;
+
+  const _HomeBody({
+    required this.connections,
+    required this.onCreateTap,
+    required this.onJoinTap,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activityAsync = ref.watch(activityFeedProvider);
+    final theme = Theme.of(context);
+
+    return Stack(
+      children: [
+        CustomScrollView(
+          slivers: [
+            // ── Your Groups ──────────────────────────────────────────────────
+            SliverToBoxAdapter(
+              child: Padding(
+                padding:
+                    const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                child: Text(
+                  'Your Groups',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (_, i) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _ConnectionCard(connection: connections[i]),
+                  ),
+                  childCount: connections.length,
+                ),
+              ),
+            ),
+
+            // ── What's New ───────────────────────────────────────────────────
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+                child: Text(
+                  "What's New",
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
+            ),
+            activityAsync.when(
+              loading: () => const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              ),
+              error: (_, __) => const SliverToBoxAdapter(child: SizedBox()),
+              data: (items) => items.isEmpty
+                  ? SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        child: _ActivityEmptyCard(),
+                      ),
+                    )
+                  : SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (_, i) => _ActivityTile(item: items[i]),
+                          childCount: items.length,
+                        ),
+                      ),
+                    ),
+            ),
+
+            // Bottom padding so content clears the FAB row
+            const SliverToBoxAdapter(child: SizedBox(height: 120)),
+          ],
+        ),
+
+        // ── Floating action buttons ──────────────────────────────────────────
+        Positioned(
+          left: 16,
+          right: 16,
+          bottom: 24,
+          child: Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: onCreateTap,
+                  icon: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('Create'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onJoinTap,
+                  icon: const Icon(Icons.vpn_key_outlined, size: 16),
+                  label: const Text('Join'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Activity tile ─────────────────────────────────────────────────────────────
+
+class _ActivityTile extends StatelessWidget {
+  final ActivityItem item;
+  const _ActivityTile({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Avatar bubble
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: AppTheme.brightPurple.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+              border: Border.all(
+                  color: AppTheme.brightPurple.withValues(alpha: 0.25)),
+            ),
+            child: Center(
+              child: Icon(_typeIcon(item.type),
+                  size: 17, color: AppTheme.brightPurple),
+            ),
+          ),
+          const SizedBox(width: 12),
+
+          // Text block
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                RichText(
+                  text: TextSpan(
+                    style: theme.textTheme.bodyMedium,
+                    children: [
+                      TextSpan(
+                        text: item.actor,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      TextSpan(text: ' ${item.sentence}'),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    Text(
+                      item.connectionName,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: AppTheme.brightPurple,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      ' · ${_timeAgo(item.createdAt)}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _typeIcon(String type) {
+    switch (type) {
+      case 'item_added':
+        return Icons.add_circle_outline_rounded;
+      case 'item_claimed':
+        return Icons.card_giftcard_rounded;
+      case 'member_joined':
+        return Icons.person_add_alt_1_rounded;
+      default:
+        return Icons.circle_outlined;
+    }
+  }
+
+  String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 60) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${(diff.inDays / 7).floor()}w ago';
+  }
+}
+
+class _ActivityEmptyCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest
+            .withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Text(
+        'Activity from your groups will appear here once things start happening.',
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+          height: 1.5,
+        ),
+      ),
     );
   }
 }
@@ -116,58 +364,7 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-// ── Connections List ──────────────────────────────────────────────────────────
-
-class _ConnectionsList extends StatelessWidget {
-  final List<ConnectionModel> connections;
-  final VoidCallback onCreateTap;
-  final VoidCallback onJoinTap;
-
-  const _ConnectionsList({
-    required this.connections,
-    required this.onCreateTap,
-    required this.onJoinTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        ListView.separated(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
-          itemCount: connections.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 12),
-          itemBuilder: (_, i) => _ConnectionCard(connection: connections[i]),
-        ),
-        // Floating action buttons at the bottom
-        Positioned(
-          left: 16,
-          right: 16,
-          bottom: 24,
-          child: Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: onCreateTap,
-                  icon: const Icon(Icons.add_rounded, size: 18),
-                  label: const Text('Create'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onJoinTap,
-                  icon: const Icon(Icons.vpn_key_outlined, size: 16),
-                  label: const Text('Join'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
+// ── Connections List (connection card) ────────────────────────────────────────
 
 class _ConnectionCard extends StatelessWidget {
   final ConnectionModel connection;
