@@ -88,6 +88,7 @@ class WishlistActions {
     await client.rpc('delete_wishlist_item', params: {'p_item_id': itemId});
     ref.invalidate(wishlistItemsProvider(connectionId));
     ref.invalidate(allMovieItemsProvider);
+    ref.invalidate(activityFeedProvider);
   }
 
   /// Updates an item the current user owns via SECURITY DEFINER RPC.
@@ -128,6 +129,7 @@ class WishlistActions {
     await client.rpc('unclaim_wishlist_item', params: {'p_item_id': itemId});
     ref.invalidate(wishlistItemsProvider(connectionId));
     ref.invalidate(allMovieItemsProvider);
+    ref.invalidate(activityFeedProvider);
   }
 
   /// Marks a claimed item as gifted (moves it to history).

@@ -18,6 +18,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
+  bool _isGoogleLoading = false;
 
   @override
   void dispose() {
@@ -42,6 +43,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       if (mounted) _showError('Something went wrong. Please try again.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _signInWithGoogle() async {
+    setState(() => _isGoogleLoading = true);
+    try {
+      await ref.read(authActionsProvider).signInWithGoogle();
+      // On web the page redirects away — no further action needed.
+      // On mobile the browser opens; deep link brings the user back.
+    } on AuthException catch (e) {
+      if (mounted) _showError(e.message);
+    } catch (_) {
+      if (mounted) _showError('Could not sign in with Google. Please try again.');
+    } finally {
+      if (mounted) setState(() => _isGoogleLoading = false);
     }
   }
 
@@ -231,10 +247,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
                 const SizedBox(height: 24),
 
-                // Google sign in (placeholder)
+                // Google sign in
                 OutlinedButton.icon(
-                  onPressed: () => _showError('Google Sign-In coming soon'),
-                  icon: const Icon(Icons.g_mobiledata_rounded, size: 22),
+                  onPressed: _isLoading || _isGoogleLoading ? null : _signInWithGoogle,
+                  icon: _isGoogleLoading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2.5),
+                        )
+                      : const Icon(Icons.g_mobiledata_rounded, size: 22),
                   label: const Text('Continue with Google'),
                 ),
 

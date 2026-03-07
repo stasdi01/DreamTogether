@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -62,6 +63,28 @@ class AuthActions {
 
   Future<void> resetPassword(String email) async {
     await _client.auth.resetPasswordForEmail(email);
+  }
+
+  /// Signs in with Google via Supabase OAuth.
+  /// On web: redirects the current page to Google then back.
+  /// On mobile: opens the system browser and returns via deep link.
+  Future<void> signInWithGoogle() async {
+    await _client.auth.signInWithOAuth(
+      OAuthProvider.google,
+      redirectTo: kIsWeb
+          ? Uri.base.origin
+          : 'com.dreamtogether.dreamtogether://login-callback',
+    );
+  }
+
+  /// Ensures the profile row exists for the currently signed-in user.
+  /// Called after OAuth redirects where we can't inline the upsert.
+  Future<void> syncProfile() async {
+    final user = _client.auth.currentUser;
+    if (user == null) return;
+    try {
+      await _upsertProfile(user);
+    } catch (_) {}
   }
 
   /// Ensures the user profile row exists in public.users.

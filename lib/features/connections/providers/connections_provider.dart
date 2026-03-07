@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/providers/auth_provider.dart';
+import '../../movies/providers/movies_provider.dart';
 import '../models/connection_model.dart';
+import 'activity_provider.dart';
 
 // ── Fetch all connections for current user ──────────────────────────────────
 
@@ -76,6 +78,8 @@ class ConnectionActions {
       params: {'p_connection_id': connectionId},
     );
     ref.invalidate(connectionsProvider);
+    ref.invalidate(allMovieItemsProvider);
+    ref.invalidate(activityFeedProvider);
   }
 
   /// Joins a connection via a Postgres function (SECURITY DEFINER).
@@ -86,6 +90,7 @@ class ConnectionActions {
       params: {'p_code': code.trim()},
     );
     ref.invalidate(connectionsProvider);
+    ref.invalidate(activityFeedProvider);
     final data = result as Map<String, dynamic>;
     return data['connection_name'] as String;
   }

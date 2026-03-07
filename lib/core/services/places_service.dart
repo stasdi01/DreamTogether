@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:developer' as dev;
 import 'package:http/http.dart' as http;
+import '../config/app_secrets.dart';
 
 class PlaceResult {
   final String placeId;
@@ -19,9 +20,7 @@ class PlaceResult {
 }
 
 class PlacesService {
-  // Get a key at: https://console.cloud.google.com → APIs → Places API
-  // Enable "Places API" (legacy) for the key.
-  static const _apiKey = 'AIzaSyB2rwTGK8-mw5afl0zdfbYML9mZ2-h9Y20';
+  static const _apiKey = AppSecrets.googlePlacesApiKey;
   static const _baseUrl = 'https://maps.googleapis.com/maps/api/place';
 
   /// Returns up to 5 autocomplete suggestions for the given input.
