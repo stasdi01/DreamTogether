@@ -31,9 +31,17 @@ class MoviesScreen extends ConsumerWidget {
           message: e.toString(),
           onRetry: () => ref.invalidate(allMovieItemsProvider),
         ),
-        data: (movies) => movies.isEmpty
-            ? _EmptyState(onGoToLists: () => context.go('/wishlist'))
-            : _MovieList(movies: movies),
+        data: (movies) => RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(allMovieItemsProvider);
+            await ref
+                .read(allMovieItemsProvider.future)
+                .catchError((_) => <MovieItemRow>[]);
+          },
+          child: movies.isEmpty
+              ? _EmptyState(onGoToLists: () => context.go('/wishlist'))
+              : _MovieList(movies: movies),
+        ),
       ),
     );
   }
@@ -48,52 +56,60 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 40),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 88,
-              height: 88,
-              decoration: BoxDecoration(
-                color: const Color(0xFFEA580C).withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-                border: Border.all(
-                    color: const Color(0xFFEA580C).withValues(alpha: 0.25)),
-              ),
-              child: const Icon(
-                Icons.movie_outlined,
-                color: Color(0xFFEA580C),
-                size: 44,
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: SizedBox(
+          height: constraints.maxHeight,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 40),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 88,
+                    height: 88,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEA580C).withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                          color: const Color(0xFFEA580C).withValues(alpha: 0.25)),
+                    ),
+                    child: const Icon(
+                      Icons.movie_outlined,
+                      color: Color(0xFFEA580C),
+                      size: 44,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    'No movies yet',
+                    style: theme.textTheme.titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Add movies to your lists from the\nLists tab — they\'ll appear here.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      height: 1.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 28),
+                  SizedBox(
+                    width: 200,
+                    child: OutlinedButton.icon(
+                      onPressed: onGoToLists,
+                      icon: const Icon(Icons.list_alt_outlined, size: 18),
+                      label: const Text('Go to Lists'),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 24),
-            Text(
-              'No movies yet',
-              style: theme.textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Add movies to your lists from the\nLists tab — they\'ll appear here.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                height: 1.5,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 28),
-            SizedBox(
-              width: 200,
-              child: OutlinedButton.icon(
-                onPressed: onGoToLists,
-                icon: const Icon(Icons.list_alt_outlined, size: 18),
-                label: const Text('Go to Lists'),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

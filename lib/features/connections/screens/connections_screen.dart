@@ -25,7 +25,10 @@ class ConnectionsScreen extends ConsumerWidget {
       ),
       body: connectionsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _ErrorState(message: e.toString()),
+        error: (e, _) => _ErrorState(
+          message: e.toString(),
+          onRetry: () => ref.invalidate(connectionsProvider),
+        ),
         data: (connections) => connections.isEmpty
             ? _EmptyState(
                 onCreateTap: () => _showCreateSheet(context, ref),
@@ -78,7 +81,13 @@ class _HomeBody extends ConsumerWidget {
 
     return Stack(
       children: [
-        CustomScrollView(
+        RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(connectionsProvider);
+            ref.invalidate(activityFeedProvider);
+            await ref.read(connectionsProvider.future).catchError((_) => <ConnectionModel>[]);
+          },
+          child: CustomScrollView(
           slivers: [
             // ── Your Groups ──────────────────────────────────────────────────
             SliverToBoxAdapter(
@@ -150,6 +159,7 @@ class _HomeBody extends ConsumerWidget {
             // Bottom padding so content clears the FAB row
             const SliverToBoxAdapter(child: SizedBox(height: 120)),
           ],
+        ),
         ),
 
         // ── Floating action buttons ──────────────────────────────────────────
@@ -732,7 +742,8 @@ class _JoinConnectionSheetState extends ConsumerState<_JoinConnectionSheet> {
 
 class _ErrorState extends StatelessWidget {
   final String message;
-  const _ErrorState({required this.message});
+  final VoidCallback? onRetry;
+  const _ErrorState({required this.message, this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -756,6 +767,14 @@ class _ErrorState extends StatelessWidget {
               style: Theme.of(context).textTheme.bodySmall,
               textAlign: TextAlign.center,
             ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Try again'),
+              ),
+            ],
           ],
         ),
       ),

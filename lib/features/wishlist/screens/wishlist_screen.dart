@@ -23,16 +23,69 @@ class WishlistScreen extends ConsumerWidget {
       ),
       body: connectionsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (connections) => connections.isEmpty
-            ? _EmptyListsState()
-            : ListView.separated(
-                padding: const EdgeInsets.all(16),
-                itemCount: connections.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
-                itemBuilder: (_, i) =>
-                    _ListConnectionCard(connection: connections[i]),
-              ),
+        error: (e, _) => _ErrorState(
+          onRetry: () => ref.invalidate(connectionsProvider),
+        ),
+        data: (connections) => RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(connectionsProvider);
+            await ref
+                .read(connectionsProvider.future)
+                .catchError((_) => <ConnectionModel>[]);
+          },
+          child: connections.isEmpty
+              ? _EmptyListsState()
+              : ListView.separated(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: connections.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (_, i) =>
+                      _ListConnectionCard(connection: connections[i]),
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Error state ───────────────────────────────────────────────────────────────
+
+class _ErrorState extends StatelessWidget {
+  final VoidCallback onRetry;
+  const _ErrorState({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline_rounded,
+                color: Color(0xFFEF4444), size: 48),
+            const SizedBox(height: 16),
+            Text(
+              'Something went wrong',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Could not load your groups.',
+              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: const Text('Try again'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -44,49 +97,57 @@ class _EmptyListsState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 40),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                color: AppTheme.brightPurple.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-                border: Border.all(
-                    color: AppTheme.brightPurple.withValues(alpha: 0.25)),
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: SizedBox(
+          height: constraints.maxHeight,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 40),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      color: AppTheme.brightPurple.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                          color: AppTheme.brightPurple.withValues(alpha: 0.25)),
+                    ),
+                    child: const Icon(Icons.favorite_outline_rounded,
+                        color: AppTheme.brightPurple, size: 40),
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    'No groups yet',
+                    style: theme.textTheme.titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Create or join a group from the\nHome tab to start your wishlists.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      height: 1.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 28),
+                  SizedBox(
+                    width: 200,
+                    child: OutlinedButton.icon(
+                      onPressed: () => context.go('/home'),
+                      icon: const Icon(Icons.people_outline_rounded, size: 18),
+                      label: const Text('Go to Home'),
+                    ),
+                  ),
+                ],
               ),
-              child: const Icon(Icons.favorite_outline_rounded,
-                  color: AppTheme.brightPurple, size: 40),
             ),
-            const SizedBox(height: 24),
-            Text(
-              'No groups yet',
-              style: theme.textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Create or join a group from the\nHome tab to start your wishlists.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                height: 1.5,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 28),
-            SizedBox(
-              width: 200,
-              child: OutlinedButton.icon(
-                onPressed: () => context.go('/home'),
-                icon: const Icon(Icons.people_outline_rounded, size: 18),
-                label: const Text('Go to Home'),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
