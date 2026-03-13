@@ -3,6 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:printing/printing.dart';
+import 'package:share_plus/share_plus.dart';
+import '../../../core/services/export_service.dart';
 import '../../../core/services/og_service.dart';
 import '../../../core/services/places_service.dart';
 import '../../../core/services/tmdb_service.dart';
@@ -117,6 +122,68 @@ class _ConnectionDetailScreenState
     );
   }
 
+  /// Builds member→items map from current provider state.
+  MemberItems _buildMemberItems(List<WishlistItem> items) {
+    final result = <String, List<WishlistItem>>{};
+    for (final m in _sortedMembers) {
+      result[m.userId] = items.where((i) => i.userId == m.userId).toList();
+    }
+    return result;
+  }
+
+  Map<String, String> _buildMemberNames() {
+    return {
+      for (final m in _sortedMembers)
+        m.userId: m.displayName ?? 'Member',
+    };
+  }
+
+  Future<void> _exportPdf(
+      BuildContext context, ConnectionModel connection) async {
+    final itemsAsync = ref.read(wishlistItemsProvider(widget.connectionId));
+    final items = itemsAsync.value ?? [];
+
+    try {
+      final bytes = await ExportService.generatePdf(
+        connectionName: connection.name,
+        memberNames: _buildMemberNames(),
+        memberItems: _buildMemberItems(items),
+      );
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: '${connection.name}_wishlist.pdf',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Export failed: $e')));
+      }
+    }
+  }
+
+  Future<void> _exportCsv(
+      BuildContext context, ConnectionModel connection) async {
+    final itemsAsync = ref.read(wishlistItemsProvider(widget.connectionId));
+    final items = itemsAsync.value ?? [];
+
+    try {
+      final csv = ExportService.generateCsv(
+        memberNames: _buildMemberNames(),
+        memberItems: _buildMemberItems(items),
+      );
+      final bytes = Uint8List.fromList(utf8.encode(csv));
+      await Share.shareXFiles(
+        [XFile.fromData(bytes, name: '${connection.name}_wishlist.csv', mimeType: 'text/csv')],
+        subject: '${connection.name} Wishlist',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Export failed: $e')));
+      }
+    }
+  }
+
   Future<void> _showLeaveDialog(
       BuildContext context, ConnectionModel connection) async {
     final confirm = await showDialog<bool>(
@@ -199,8 +266,31 @@ class _ConnectionDetailScreenState
               icon: const Icon(Icons.more_vert),
               onSelected: (value) {
                 if (value == 'leave') _showLeaveDialog(context, connection);
+                if (value == 'export_pdf') _exportPdf(context, connection);
+                if (value == 'export_csv') _exportCsv(context, connection);
               },
               itemBuilder: (_) => [
+                const PopupMenuItem(
+                  value: 'export_pdf',
+                  child: Row(
+                    children: [
+                      Icon(Icons.picture_as_pdf_outlined, size: 20),
+                      SizedBox(width: 12),
+                      Text('Export as PDF'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'export_csv',
+                  child: Row(
+                    children: [
+                      Icon(Icons.table_chart_outlined, size: 20),
+                      SizedBox(width: 12),
+                      Text('Export as CSV'),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
                 const PopupMenuItem(
                   value: 'leave',
                   child: Row(

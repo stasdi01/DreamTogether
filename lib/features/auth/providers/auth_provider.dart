@@ -19,6 +19,24 @@ final authActionsProvider = Provider<AuthActions>((ref) {
   return AuthActions(ref.watch(supabaseClientProvider));
 });
 
+/// The current user's row from public.users (display_name, avatar_url, etc).
+/// Re-runs on auth state change so it stays fresh after sign-in/OAuth.
+final currentProfileProvider =
+    FutureProvider<Map<String, dynamic>?>((ref) async {
+  ref.watch(authStateProvider);
+  final client = ref.watch(supabaseClientProvider);
+  final user = client.auth.currentUser;
+  if (user == null) return null;
+
+  final response = await client
+      .from('users')
+      .select()
+      .eq('id', user.id)
+      .maybeSingle();
+
+  return response as Map<String, dynamic>?;
+});
+
 class AuthActions {
   final SupabaseClient _client;
   AuthActions(this._client);
