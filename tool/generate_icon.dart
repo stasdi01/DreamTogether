@@ -14,7 +14,35 @@ import 'package:image/image.dart' as img;
 void main() {
   _generateFullIcon();
   _generateForegroundIcon();
+  _generatePlayStoreIcon();
   print('Done! Check assets/icon/');
+}
+
+// ── Play Store icon (512×512, no alpha) ──────────────────────────────────────
+
+void _generatePlayStoreIcon() {
+  const size = 512;
+  final image = img.Image(width: size, height: size, numChannels: 4);
+
+  for (var y = 0; y < size; y++) {
+    final t = y / (size - 1);
+    final r = (30 + (107 - 30) * t).round();
+    final g = (27 + (33 - 27) * t).round();
+    final b = (75 + (168 - 75) * t).round();
+    for (var x = 0; x < size; x++) {
+      image.setPixelRgba(x, y, r, g, b, 255);
+    }
+  }
+
+  _drawHeart(
+    image,
+    cx: size / 2,
+    cy: size / 2 + 15,
+    scale: 12.0,
+    color: img.ColorRgba8(255, 255, 255, 255),
+  );
+
+  _save(image, 'assets/icon/app_icon_512.png');
 }
 
 // ── Full icon (gradient background + white heart) ────────────────────────────
